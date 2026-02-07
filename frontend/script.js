@@ -78,17 +78,20 @@ async function fetchUsers() {
     }
 }
 
-// Render users to the DOM
+// Render users to the DOM with animation delay
 function renderUsers(users) {
     usersContainer.innerHTML = '';
 
-    users.forEach(user => {
+    users.forEach((user, index) => {
         const userCard = document.createElement('div');
         userCard.className = 'user-card';
+        // Add animation delay for staggered entrance
+        userCard.style.animationDelay = `${index * 0.08}s`;
+
         userCard.innerHTML = `
       <div class="user-header">
         <div class="user-name">${user.name}</div>
-        <div class="user-id">ID: ${user.id}</div>
+        <div class="user-id">#${user.id}</div>
       </div>
       <div class="user-details">
         <div class="user-detail">
@@ -284,47 +287,6 @@ function showNotification(message, type = 'info') {
     }, 3000);
 }
 
-// Add notification styles dynamically
-const notificationStyles = document.createElement('style');
-notificationStyles.textContent = `
-  .notification {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 15px 20px;
-    border-radius: 6px;
-    color: white;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    z-index: 1000;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-    transform: translateX(100%);
-    transition: transform 0.3s ease;
-  }
-  
-  .notification.show {
-    transform: translateX(0);
-  }
-  
-  .notification.success {
-    background-color: #2ecc71;
-    border-left: 4px solid #27ae60;
-  }
-  
-  .notification.info {
-    background-color: #3498db;
-    border-left: 4px solid #2980b9;
-  }
-  
-  .notification.error {
-    background-color: #e74c3c;
-    border-left: 4px solid #c0392b;
-  }
-`;
-document.head.appendChild(notificationStyles);
-
 // Event Listeners
 userForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -370,4 +332,22 @@ refreshBtn.addEventListener('click', fetchUsers);
 document.addEventListener('DOMContentLoaded', () => {
     checkApiStatus();
     fetchUsers();
+
+    // Scroll to top functionality
+    const scrollTopBtn = document.getElementById('scrollTopBtn');
+
+    window.addEventListener('scroll', () => {
+        if (window.pageYOffset > 300) {
+            scrollTopBtn.classList.add('show');
+        } else {
+            scrollTopBtn.classList.remove('show');
+        }
+    });
+
+    scrollTopBtn.addEventListener('click', () => {
+        window.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+        });
+    });
 });
