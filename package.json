@@ -1,0 +1,10 @@
+{
+    "name": "simple-rest-api-workspace",
+    "version": "1.0.0",
+    "description": "Root workspace for Simple REST API",
+    "scripts": {
+        "start": "npm start --prefix backend",
+        "dev": "npm run dev --prefix backend",
+        "install-backend": "npm install --prefix backend"
+    }
+}
