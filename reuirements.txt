@@ -1,0 +1,1534 @@
+Backend Dependencies
+package.json
+
+json
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "nodemon",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "migrate": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.0.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.0.0",
+    "jsonwebtoken": "^9.0.0",
+    "morgan": "^1.10.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.0",
+    "winston": "^3.9.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.2",
+    "@types/cors": "^2.8.13",
+    "@types/express": "^4.17.17",
+    "@types/jsonwebtoken": "^9.0.2",
+    "@types/morgan": "^1.9.4",
+    "@types/node": "^20.2.5",
+    "@types/swagger-jsdoc": "^6.0.1",
+    "@types/swagger-ui-express": "^4.1.3",
+    "nodemon": "^2.0.22",
+    "prisma": "^5.0.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.3"
+  }
+}
+tsconfig.json
+
+json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
+prisma/schema.prisma
+
+prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  role      String   @default("user") // "user" or "admin"
+  tasks     Task[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  completed   Boolean  @default(false)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+.env.example
+
+text
+NODE_ENV=development
+PORT=5000
+DATABASE_URL="postgresql://user:password@localhost:5432/mydb"
+JWT_SECRET="your-secret-key-change-this"
+JWT_EXPIRES_IN="7d"
+BCRYPT_ROUNDS=10
+Backend Source Code
+src/server.ts
+
+ts
+import app from './app';
+import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
+
+dotenv.config();
+
+const PORT = process.env.PORT || 5000;
+
+export const prisma = new PrismaClient();
+
+async function main() {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+main()
+  .catch(async (e) => {
+    console.error(e);
+    await prisma.$disconnect();
+    process.exit(1);
+  });
+src/app.ts
+
+ts
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import authRoutes from './routes/authRoutes';
+import taskRoutes from './routes/taskRoutes';
+import errorHandler from './middlewares/errorHandler';
+import { specs, swaggerUi } from './docs/swagger';
+
+const app = express();
+
+// Security middleware
+app.use(helmet());
+app.use(cors());
+app.use(morgan('combined'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// API documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+
+// Routes
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/tasks', taskRoutes);
+
+// Health check
+app.get('/health', (req, res) => res.status(200).json({ status: 'OK' }));
+
+// Error handling (must be last)
+app.use(errorHandler);
+
+export default app;
+src/docs/swagger.ts
+
+ts
+import swaggerJsdoc from 'swagger-jsdoc';
+import swaggerUi from 'swagger-ui-express';
+
+const options = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Task Manager API',
+      version: '1.0.0',
+      description: 'Authentication & CRUD operations for tasks',
+    },
+    servers: [{ url: 'http://localhost:5000/api/v1' }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+        },
+      },
+    },
+    security: [{ bearerAuth: [] }],
+  },
+  apis: ['./src/routes/*.ts', './src/controllers/*.ts'],
+};
+
+export const specs = swaggerJsdoc(options);
+export { swaggerUi };
+src/middlewares/auth.ts
+
+ts
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { prisma } from '../server';
+
+export interface AuthRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    role: string;
+  };
+}
+
+export const authenticate = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
+      id: string;
+    };
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: { id: true, email: true, role: true },
+    });
+
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+};
+
+export const authorizeAdmin = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'Forbidden: Admins only' });
+  }
+  next();
+};
+src/middlewares/errorHandler.ts
+
+ts
+import { Request, Response, NextFunction } from 'express';
+import logger from '../utils/logger';
+
+const errorHandler = (
+  err: any,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  logger.error(err.stack);
+
+  const status = err.status || 500;
+  const message = err.message || 'Internal Server Error';
+
+  res.status(status).json({
+    success: false,
+    message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+  });
+};
+
+export default errorHandler;
+src/middlewares/validation.ts
+
+ts
+import { body, validationResult } from 'express-validator';
+import { Request, Response, NextFunction } from 'express';
+
+export const validate = (validations: any[]) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    await Promise.all(validations.map((validation) => validation.run(req)));
+
+    const errors = validationResult(req);
+    if (errors.isEmpty()) {
+      return next();
+    }
+
+    res.status(400).json({
+      success: false,
+      errors: errors.array(),
+    });
+  };
+};
+
+// Auth validations
+export const registerValidation = [
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('role').optional().isIn(['user', 'admin']),
+];
+
+export const loginValidation = [
+  body('email').isEmail().normalizeEmail(),
+  body('password').notEmpty(),
+];
+
+// Task validations
+export const taskValidation = [
+  body('title').notEmpty().trim().isLength({ max: 100 }),
+  body('description').optional().trim(),
+  body('completed').optional().isBoolean(),
+];
+src/routes/authRoutes.ts
+
+ts
+import { Router } from 'express';
+import { register, login, getProfile } from '../controllers/authController';
+import { registerValidation, loginValidation, validate } from '../middlewares/validation';
+import { authenticate } from '../middlewares/auth';
+
+const router = Router();
+
+/**
+ * @swagger
+ * /auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *                 enum: [user, admin]
+ *     responses:
+ *       201:
+ *         description: User created
+ */
+router.post('/register', validate(registerValidation), register);
+
+/**
+ * @swagger
+ * /auth/login:
+ *   post:
+ *     summary: Login user
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login successful
+ */
+router.post('/login', validate(loginValidation), login);
+
+/**
+ * @swagger
+ * /auth/profile:
+ *   get:
+ *     summary: Get current user profile
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: User profile
+ */
+router.get('/profile', authenticate, getProfile);
+
+export default router;
+src/routes/taskRoutes.ts
+
+ts
+import { Router } from 'express';
+import {
+  getTasks,
+  getTask,
+  createTask,
+  updateTask,
+  deleteTask,
+} from '../controllers/taskController';
+import { authenticate, authorizeAdmin } from '../middlewares/auth';
+import { taskValidation, validate } from '../middlewares/validation';
+
+const router = Router();
+
+// All task routes require authentication
+router.use(authenticate);
+
+/**
+ * @swagger
+ * /tasks:
+ *   get:
+ *     summary: Get all tasks for the logged-in user
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of tasks
+ */
+router.get('/', getTasks);
+
+/**
+ * @swagger
+ * /tasks/{id}:
+ *   get:
+ *     summary: Get a single task
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Task details
+ */
+router.get('/:id', getTask);
+
+/**
+ * @swagger
+ * /tasks:
+ *   post:
+ *     summary: Create a new task
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [title]
+ *             properties:
+ *               title:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Task created
+ */
+router.post('/', validate(taskValidation), createTask);
+
+/**
+ * @swagger
+ * /tasks/{id}:
+ *   put:
+ *     summary: Update a task
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               completed:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Task updated
+ */
+router.put('/:id', validate(taskValidation), updateTask);
+
+/**
+ * @swagger
+ * /tasks/{id}:
+ *   delete:
+ *     summary: Delete a task (admin only)
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       204:
+ *         description: Task deleted
+ */
+router.delete('/:id', authorizeAdmin, deleteTask);
+
+export default router;
+src/controllers/authController.ts
+
+ts
+import { Request, Response, NextFunction } from 'express';
+import { prisma } from '../server';
+import { hashPassword, comparePassword } from '../utils/password';
+import { generateToken } from '../utils/jwt';
+import { AuthRequest } from '../middlewares/auth';
+
+export const register = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { email, password, role } = req.body;
+
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(409).json({ message: 'Email already exists' });
+    }
+
+    const hashedPassword = await hashPassword(password);
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        role: role || 'user',
+      },
+      select: { id: true, email: true, role: true, createdAt: true },
+    });
+
+    const token = generateToken(user.id);
+
+    res.status(201).json({
+      success: true,
+      data: { user, token },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const login = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    const isValid = await comparePassword(password, user.password);
+    if (!isValid) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    const token = generateToken(user.id);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user: { id: user.id, email: user.email, role: user.role },
+        token,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getProfile = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    res.status(200).json({
+      success: true,
+      data: req.user,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+src/controllers/taskController.ts
+
+ts
+import { Request, Response, NextFunction } from 'express';
+import { prisma } from '../server';
+import { AuthRequest } from '../middlewares/auth';
+
+export const getTasks = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const tasks = await prisma.task.findMany({
+      where: { userId: req.user!.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.status(200).json({ success: true, data: tasks });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getTask = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { id } = req.params;
+    const task = await prisma.task.findFirst({
+      where: { id, userId: req.user!.id },
+    });
+
+    if (!task) {
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    res.status(200).json({ success: true, data: task });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const createTask = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { title, description } = req.body;
+    const task = await prisma.task.create({
+      data: {
+        title,
+        description,
+        userId: req.user!.id,
+      },
+    });
+    res.status(201).json({ success: true, data: task });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateTask = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { id } = req.params;
+    const { title, description, completed } = req.body;
+
+    const task = await prisma.task.findFirst({
+      where: { id, userId: req.user!.id },
+    });
+
+    if (!task) {
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    const updated = await prisma.task.update({
+      where: { id },
+      data: { title, description, completed },
+    });
+
+    res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteTask = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { id } = req.params;
+
+    // Admin can delete any task; we already checked admin role in middleware
+    const task = await prisma.task.findUnique({ where: { id } });
+    if (!task) {
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    await prisma.task.delete({ where: { id } });
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+};
+src/services/authService.ts (optional – business logic can be here, but we kept it simple in controllers)
+
+src/utils/jwt.ts
+
+ts
+import jwt from 'jsonwebtoken';
+
+export const generateToken = (userId: string): string => {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET!, {
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  });
+};
+src/utils/password.ts
+
+ts
+import bcrypt from 'bcryptjs';
+
+export const hashPassword = async (password: string): Promise<string> => {
+  const saltRounds = parseInt(process.env.BCRYPT_ROUNDS || '10');
+  return bcrypt.hash(password, saltRounds);
+};
+
+export const comparePassword = async (
+  password: string,
+  hash: string
+): Promise<boolean> => {
+  return bcrypt.compare(password, hash);
+};
+src/utils/logger.ts
+
+ts
+import winston from 'winston';
+
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+  ],
+});
+
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple(),
+  }));
+}
+
+export default logger;
+Frontend (Next.js + Tailwind CSS)
+Frontend Dependencies
+frontend/package.json
+
+json
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "axios": "^1.4.0",
+    "next": "13.4.7",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-hot-toast": "^2.4.1",
+    "react-hook-form": "^7.45.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.2.5",
+    "@types/react": "^18.2.8",
+    "autoprefixer": "^10.4.14",
+    "postcss": "^8.4.24",
+    "tailwindcss": "^3.3.2",
+    "typescript": "^5.1.3"
+  }
+}
+frontend/tailwind.config.js
+
+js
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    './pages/**/*.{js,ts,jsx,tsx}',
+    './components/**/*.{js,ts,jsx,tsx}',
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+frontend/next.config.js
+
+js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+}
+
+module.exports = nextConfig
+frontend/.env.local.example
+
+text
+NEXT_PUBLIC_API_URL=http://localhost:5000/api/v1
+Frontend Source Code
+frontend/pages/_app.tsx
+
+tsx
+import '../styles/globals.css';
+import type { AppProps } from 'next/app';
+import { AuthProvider } from '../context/AuthContext';
+import { Toaster } from 'react-hot-toast';
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
+    <AuthProvider>
+      <Component {...pageProps} />
+      <Toaster position="top-right" />
+    </AuthProvider>
+  );
+}
+frontend/styles/globals.css
+
+css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+frontend/context/AuthContext.tsx
+
+tsx
+import React, { createContext, useState, useEffect, useContext } from 'react';
+import { useRouter } from 'next/router';
+import { login as apiLogin, register as apiRegister, getProfile } from '../lib/api';
+import toast from 'react-hot-toast';
+
+interface User {
+  id: string;
+  email: string;
+  role: string;
+}
+
+interface AuthContextType {
+  user: User | null;
+  token: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, role?: string) => Promise<void>;
+  logout: () => void;
+  loading: boolean;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
+  useEffect(() => {
+    const storedToken = localStorage.getItem('token');
+    if (storedToken) {
+      setToken(storedToken);
+      fetchUser(storedToken);
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchUser = async (jwt: string) => {
+    try {
+      const data = await getProfile(jwt);
+      setUser(data);
+    } catch (error) {
+      console.error('Failed to fetch user', error);
+      localStorage.removeItem('token');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const login = async (email: string, password: string) => {
+    try {
+      const data = await apiLogin(email, password);
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+      setUser(data.user);
+      toast.success('Login successful');
+      router.push('/dashboard');
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Login failed');
+      throw error;
+    }
+  };
+
+  const register = async (email: string, password: string, role = 'user') => {
+    try {
+      const data = await apiRegister(email, password, role);
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+      setUser(data.user);
+      toast.success('Registration successful');
+      router.push('/dashboard');
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Registration failed');
+      throw error;
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+    router.push('/');
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, token, login, register, logout, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
+  return context;
+};
+frontend/lib/api.ts
+
+ts
+import axios from 'axios';
+
+const API = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
+});
+
+export const register = async (email: string, password: string, role?: string) => {
+  const res = await API.post('/auth/register', { email, password, role });
+  return res.data.data;
+};
+
+export const login = async (email: string, password: string) => {
+  const res = await API.post('/auth/login', { email, password });
+  return res.data.data;
+};
+
+export const getProfile = async (token: string) => {
+  const res = await API.get('/auth/profile', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.data;
+};
+
+// Tasks
+export const getTasks = async (token: string) => {
+  const res = await API.get('/tasks', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.data;
+};
+
+export const createTask = async (token: string, task: { title: string; description?: string }) => {
+  const res = await API.post('/tasks', task, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.data;
+};
+
+export const updateTask = async (
+  token: string,
+  id: string,
+  task: { title?: string; description?: string; completed?: boolean }
+) => {
+  const res = await API.put(`/tasks/${id}`, task, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data.data;
+};
+
+export const deleteTask = async (token: string, id: string) => {
+  await API.delete(`/tasks/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+};
+frontend/components/Layout.tsx
+
+tsx
+import React from 'react';
+import Link from 'next/link';
+import { useAuth } from '../context/AuthContext';
+
+const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, logout } = useAuth();
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <nav className="bg-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              <Link href="/" className="text-xl font-bold text-gray-800">
+                TaskManager
+              </Link>
+            </div>
+            <div className="flex items-center space-x-4">
+              {user ? (
+                <>
+                  <span className="text-gray-700">Hello, {user.email}</span>
+                  {user.role === 'admin' && (
+                    <span className="bg-red-100 text-red-800 px-2 py-1 rounded text-xs">Admin</span>
+                  )}
+                  <button
+                    onClick={logout}
+                    className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                  >
+                    Logout
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link href="/login" className="text-gray-700 hover:text-gray-900">
+                    Login
+                  </Link>
+                  <Link
+                    href="/register"
+                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                  >
+                    Register
+                  </Link>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </nav>
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">{children}</main>
+    </div>
+  );
+};
+
+export default Layout;
+frontend/pages/index.tsx
+
+tsx
+import React from 'react';
+import Layout from '../components/Layout';
+import Link from 'next/link';
+
+export default function Home() {
+  return (
+    <Layout>
+      <div className="text-center py-12">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4">Welcome to Task Manager</h1>
+        <p className="text-xl text-gray-600 mb-8">Manage your tasks efficiently with role-based access</p>
+        <div className="space-x-4">
+          <Link
+            href="/register"
+            className="bg-blue-500 text-white px-6 py-3 rounded-lg text-lg hover:bg-blue-600"
+          >
+            Get Started
+          </Link>
+          <Link
+            href="/login"
+            className="bg-gray-500 text-white px-6 py-3 rounded-lg text-lg hover:bg-gray-600"
+          >
+            Login
+          </Link>
+        </div>
+      </div>
+    </Layout>
+  );
+}
+frontend/pages/register.tsx
+
+tsx
+import React, { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import Layout from '../components/Layout';
+import { useAuth } from '../context/AuthContext';
+import Link from 'next/link';
+
+interface RegisterForm {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  role?: 'user' | 'admin';
+}
+
+export default function Register() {
+  const { register: registerUser } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const { register, handleSubmit, watch, formState: { errors } } = useForm<RegisterForm>();
+
+  const onSubmit = async (data: RegisterForm) => {
+    setLoading(true);
+    try {
+      await registerUser(data.email, data.password, data.role);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Layout>
+      <div className="max-w-md mx-auto bg-white p-8 rounded shadow">
+        <h2 className="text-2xl font-bold mb-6 text-center">Register</h2>
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div className="mb-4">
+            <label className="block text-gray-700 mb-2">Email</label>
+            <input
+              type="email"
+              {...register('email', { required: 'Email is required' })}
+              className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email.message}</p>}
+          </div>
+          <div className="mb-4">
+            <label className="block text-gray-700 mb-2">Password</label>
+            <input
+              type="password"
+              {...register('password', { required: 'Password is required', minLength: { value: 6, message: 'Minimum 6 characters' } })}
+              className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {errors.password && <p className="text-red-500 text-sm mt-1">{errors.password.message}</p>}
+          </div>
+          <div className="mb-4">
+            <label className="block text-gray-700 mb-2">Confirm Password</label>
+            <input
+              type="password"
+              {...register('confirmPassword', {
+                required: 'Please confirm password',
+                validate: (val) => val === watch('password') || 'Passwords do not match',
+              })}
+              className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {errors.confirmPassword && <p className="text-red-500 text-sm mt-1">{errors.confirmPassword.message}</p>}
+          </div>
+          <div className="mb-6">
+            <label className="block text-gray-700 mb-2">Role (optional)</label>
+            <select
+              {...register('role')}
+              className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 disabled:bg-blue-300"
+          >
+            {loading ? 'Registering...' : 'Register'}
+          </button>
+        </form>
+        <p className="mt-4 text-center">
+          Already have an account?{' '}
+          <Link href="/login" className="text-blue-500 hover:underline">
+            Login
+          </Link>
+        </p>
+      </div>
+    </Layout>
+  );
+}
+frontend/pages/login.tsx
+
+tsx
+import React, { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import Layout from '../components/Layout';
+import { useAuth } from '../context/AuthContext';
+import Link from 'next/link';
+
+interface LoginForm {
+  email: string;
+  password: string;
+}
+
+export default function Login() {
+  const { login } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const { register, handleSubmit, formState: { errors } } = useForm<LoginForm>();
+
+  const onSubmit = async (data: LoginForm) => {
+    setLoading(true);
+    try {
+      await login(data.email, data.password);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Layout>
+      <div className="max-w-md mx-auto bg-white p-8 rounded shadow">
+        <h2 className="text-2xl font-bold mb-6 text-center">Login</h2>
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div className="mb-4">
+            <label className="block text-gray-700 mb-2">Email</label>
+            <input
+              type="email"
+              {...register('email', { required: 'Email is required' })}
+              className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email.message}</p>}
+          </div>
+          <div className="mb-6">
+            <label className="block text-gray-700 mb-2">Password</label>
+            <input
+              type="password"
+              {...register('password', { required: 'Password is required' })}
+              className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {errors.password && <p className="text-red-500 text-sm mt-1">{errors.password.message}</p>}
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 disabled:bg-blue-300"
+          >
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
+        </form>
+        <p className="mt-4 text-center">
+          Don't have an account?{' '}
+          <Link href="/register" className="text-blue-500 hover:underline">
+            Register
+          </Link>
+        </p>
+      </div>
+    </Layout>
+  );
+}
+frontend/pages/dashboard.tsx
+
+tsx
+import React, { useEffect, useState } from 'react';
+import Layout from '../components/Layout';
+import { useAuth } from '../context/AuthContext';
+import { getTasks, createTask, updateTask, deleteTask } from '../lib/api';
+import TaskList from '../components/TaskList';
+import TaskForm from '../components/TaskForm';
+import toast from 'react-hot-toast';
+
+interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  completed: boolean;
+  createdAt: string;
+}
+
+export default function Dashboard() {
+  const { user, token } = useAuth();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchTasks = async () => {
+    if (!token) return;
+    try {
+      const data = await getTasks(token);
+      setTasks(data);
+    } catch (error) {
+      toast.error('Failed to fetch tasks');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTasks();
+  }, [token]);
+
+  const handleCreate = async (title: string, description?: string) => {
+    if (!token) return;
+    try {
+      const newTask = await createTask(token, { title, description });
+      setTasks([newTask, ...tasks]);
+      toast.success('Task created');
+    } catch (error) {
+      toast.error('Failed to create task');
+    }
+  };
+
+  const handleUpdate = async (id: string, updates: Partial<Task>) => {
+    if (!token) return;
+    try {
+      const updated = await updateTask(token, id, updates);
+      setTasks(tasks.map(t => t.id === id ? updated : t));
+      toast.success('Task updated');
+    } catch (error) {
+      toast.error('Failed to update task');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!token) return;
+    if (!confirm('Are you sure?')) return;
+    try {
+      await deleteTask(token, id);
+      setTasks(tasks.filter(t => t.id !== id));
+      toast.success('Task deleted');
+    } catch (error) {
+      toast.error('Failed to delete task');
+    }
+  };
+
+  if (!user) {
+    return (
+      <Layout>
+        <div className="text-center py-12">Please log in to access the dashboard.</div>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout>
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <TaskForm onSubmit={handleCreate} />
+        {loading ? (
+          <div className="text-center">Loading tasks...</div>
+        ) : (
+          <TaskList
+            tasks={tasks}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            isAdmin={user.role === 'admin'}
+          />
+        )}
+      </div>
+    </Layout>
+  );
+}
+frontend/components/TaskForm.tsx
+
+tsx
+import React, { useState } from 'react';
+
+interface TaskFormProps {
+  onSubmit: (title: string, description?: string) => void;
+}
+
+const TaskForm: React.FC<TaskFormProps> = ({ onSubmit }) => {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    onSubmit(title, description);
+    setTitle('');
+    setDescription('');
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-white p-4 rounded shadow">
+      <h2 className="text-lg font-semibold mb-3">Create New Task</h2>
+      <input
+        type="text"
+        placeholder="Task title"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        className="w-full px-3 py-2 border rounded mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        required
+      />
+      <textarea
+        placeholder="Description (optional)"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        className="w-full px-3 py-2 border rounded mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        rows={3}
+      />
+      <button
+        type="submit"
+        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+      >
+        Add Task
+      </button>
+    </form>
+  );
+};
+
+export default TaskForm;
+frontend/components/TaskList.tsx
+
+tsx
+import React, { useState } from 'react';
+
+interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  completed: boolean;
+  createdAt: string;
+}
+
+interface TaskListProps {
+  tasks: Task[];
+  onUpdate: (id: string, updates: Partial<Task>) => void;
+  onDelete: (id: string) => void;
+  isAdmin: boolean;
+}
+
+const TaskList: React.FC<TaskListProps> = ({ tasks, onUpdate, onDelete, isAdmin }) => {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+
+  const startEdit = (task: Task) => {
+    setEditingId(task.id);
+    setEditTitle(task.title);
+    setEditDescription(task.description || '');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+  };
+
+  const saveEdit = (id: string) => {
+    onUpdate(id, { title: editTitle, description: editDescription });
+    setEditingId(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      {tasks.length === 0 ? (
+        <p className="text-center text-gray-500">No tasks yet. Create one above!</p>
+      ) : (
+        tasks.map((task) => (
+          <div key={task.id} className="bg-white p-4 rounded shadow flex justify-between items-start">
+            {editingId === task.id ? (
+              <div className="flex-1 mr-4">
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-2 py-1 border rounded mb-2"
+                />
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-2 py-1 border rounded"
+                  rows={2}
+                />
+                <div className="mt-2 space-x-2">
+                  <button
+                    onClick={() => saveEdit(task.id)}
+                    className="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={cancelEdit}
+                    className="bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex-1">
+                  <h3 className={`text-lg font-semibold ${task.completed ? 'line-through text-gray-500' : ''}`}>
+                    {task.title}
+                  </h3>
+                  {task.description && <p className="text-gray-600 mt-1">{task.description}</p>}
+                  <p className="text-xs text-gray-400 mt-2">
+                    Created: {new Date(task.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex space-x-2 ml-4">
+                  <input
+                    type="checkbox"
+                    checked={task.completed}
+                    onChange={(e) => onUpdate(task.id, { completed: e.target.checked })}
+                    className="h-5 w-5"
+                  />
+                  <button
+                    onClick={() => startEdit(task)}
+                    className="text-blue-500 hover:text-blue-700"
+                  >
+                    Edit
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => onDelete(task.id)}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+};
+
+export default TaskList;
