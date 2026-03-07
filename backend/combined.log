@@ -53,3 +53,15 @@
 {"level":"info","message":"🚀 Server running on port 5000","timestamp":"2026-02-26T11:23:29.530Z"}
 {"level":"info","message":"📚 API Docs: http://localhost:5000/api-docs","timestamp":"2026-02-26T11:23:29.530Z"}
 {"level":"info","message":"❤️  Health: http://localhost:5000/health","timestamp":"2026-02-26T11:23:29.531Z"}
+{"level":"info","message":"✅ Database connected successfully","timestamp":"2026-03-07T01:56:53.093Z"}
+{"level":"info","message":"🚀 Server running on port 5000","timestamp":"2026-03-07T01:56:53.099Z"}
+{"level":"info","message":"📚 API Docs: http://localhost:5000/api-docs","timestamp":"2026-03-07T01:56:53.099Z"}
+{"level":"info","message":"❤️  Health: http://localhost:5000/health","timestamp":"2026-03-07T01:56:53.100Z"}
+{"level":"info","message":"\nSIGINT received. Shutting down gracefully...","timestamp":"2026-03-07T02:22:37.426Z"}
+{"level":"info","message":"Database disconnected","timestamp":"2026-03-07T02:22:37.453Z"}
+{"level":"info","message":"✅ Database connected successfully","timestamp":"2026-03-07T10:53:28.944Z"}
+{"level":"info","message":"🚀 Server running on port 5000","timestamp":"2026-03-07T10:53:28.948Z"}
+{"level":"info","message":"📚 API Docs: http://localhost:5000/api-docs","timestamp":"2026-03-07T10:53:28.949Z"}
+{"level":"info","message":"❤️  Health: http://localhost:5000/health","timestamp":"2026-03-07T10:53:28.949Z"}
+{"level":"info","message":"\nSIGINT received. Shutting down gracefully...","timestamp":"2026-03-07T11:48:12.001Z"}
+{"level":"info","message":"Database disconnected","timestamp":"2026-03-07T11:48:12.048Z"}
